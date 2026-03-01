@@ -13,16 +13,50 @@ router.post('/send', async (req, res) => {
   const results = { sms: 'skipped', whatsapp: 'skipped', email: 'skipped' };
   const errors = [];
 
-  // SMS
-  if (phone && process.env.TWILIO_ACCOUNT_SID) {
+  // SMS via Fast2SMS (free, India only)
+  if (phone && process.env.FAST2SMS_API_KEY) {
     try {
-      const twilio = require('twilio');
-      const client = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
-      await client.messages.create({
-        body: message,
-        from: process.env.TWILIO_PHONE_NUMBER,
-        to: phone,
+      const https = require('https');
+      // Strip country code for Fast2SMS — it only needs 10 digit number
+      const number = phone.replace('+91', '').replace(/\s/g, '');
+      const payload = JSON.stringify({
+        route: 'q',
+        message: message,
+        language: 'english',
+        flash: 0,
+        numbers: number,
       });
+
+      await new Promise((resolve, reject) => {
+        const options = {
+          hostname: 'www.fast2sms.com',
+          path: '/dev/bulkV2',
+          method: 'POST',
+          headers: {
+            'authorization': process.env.FAST2SMS_API_KEY,
+            'Content-Type': 'application/json',
+            'Content-Length': payload.length,
+          },
+        };
+
+        const req2 = https.request(options, (res2) => {
+          let data = '';
+          res2.on('data', chunk => data += chunk);
+          res2.on('end', () => {
+            const parsed = JSON.parse(data);
+            if (parsed.return === true) {
+              resolve(parsed);
+            } else {
+              reject(new Error(parsed.message || JSON.stringify(parsed)));
+            }
+          });
+        });
+
+        req2.on('error', reject);
+        req2.write(payload);
+        req2.end();
+      });
+
       results.sms = 'sent';
     } catch (err) {
       errors.push('SMS: ' + err.message);
@@ -30,8 +64,8 @@ router.post('/send', async (req, res) => {
     }
   }
 
-  // WhatsApp
-  if (phone && process.env.TWILIO_ACCOUNT_SID) {
+  // WhatsApp via Twilio (optional, falls back if no credentials)
+  if (phone && process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN) {
     try {
       const twilio = require('twilio');
       const client = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
@@ -47,7 +81,7 @@ router.post('/send', async (req, res) => {
     }
   }
 
-  // Email
+  // Email via Resend (free)
   if (email && process.env.RESEND_API_KEY) {
     try {
       const { Resend } = require('resend');
